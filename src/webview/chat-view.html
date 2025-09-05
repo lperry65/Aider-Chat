@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src #{cspSource} 'unsafe-inline'; script-src #{cspSource} 'unsafe-inline';">
+    <title>Aider Chat</title>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            padding: 10px;
+            margin: 0;
+            background-color: var(--vscode-sideBar-background);
+            color: var(--vscode-sideBar-foreground);
+        }
+        
+        #inputBox {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            font-size: 12px;
+            box-sizing: border-box;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+        }
+        
+        #inputBox:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            border-color: var(--vscode-focusBorder);
+        }
+        
+        #sendButton, #sendFileButton {
+            padding: 6px 12px;
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 5px;
+            font-size: 11px;
+        }
+        
+        #sendButton:hover, #sendFileButton:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        #conversationHistory {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid var(--vscode-panel-border);
+            padding: 8px;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+            border-radius: 4px;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 11px;
+            white-space: pre-wrap;
+            margin-bottom: 10px;
+        }
+        
+        .input-container {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .button-container {
+            display: flex;
+            gap: 5px;
+        }
+        
+        #modelSelect {
+            margin-bottom: 10px;
+            padding: 5px;
+            width: 100%;
+            font-size: 11px;
+            background-color: var(--vscode-dropdown-background);
+            color: var(--vscode-dropdown-foreground);
+            border: 1px solid var(--vscode-dropdown-border);
+            border-radius: 4px;
+        }
+        
+        #modelSelect:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            border-color: var(--vscode-focusBorder);
+        }
+        
+        /* Scrollbar styling for dark theme */
+        #conversationHistory::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #conversationHistory::-webkit-scrollbar-track {
+            background: var(--vscode-scrollbarSlider-background);
+        }
+        
+        #conversationHistory::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-activeBackground);
+            border-radius: 4px;
+        }
+        
+        #conversationHistory::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground);
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <label for="modelSelect">Model:</label>
+        <select id="modelSelect">
+            #{modelOptions}
+        </select>
+    </div>
+    <div id="conversationHistory"></div>
+    <div class="input-container">
+        <input id="inputBox" type="text" placeholder="Type your message to Aider...">
+        <div class="button-container">
+            <button id="sendButton">Send</button>
+            <button id="sendFileButton">Send File</button>
+        </div>
+    </div>
+    <script>
+        (function() {
+            // Acquire VS Code API once
+            const vscode = acquireVsCodeApi();
+            
+            // Cache DOM elements
+            const inputBox = document.getElementById('inputBox');
+            const sendButton = document.getElementById('sendButton');
+            const sendFileButton = document.getElementById('sendFileButton');
+            const conversationHistory = document.getElementById('conversationHistory');
+            const modelSelect = document.getElementById('modelSelect');
+
+            // Input validation
+            function sanitizeInput(input) {
+                return input.trim().substring(0, 1000); // Limit length
+            }
+
+            function sendMessage() {
+                const text = sanitizeInput(inputBox.value);
+                if (text) {
+                    const model = modelSelect.value;
+                    vscode.postMessage({ 
+                        command: 'sendToAider', 
+                        text: text, 
+                        model: model 
+                    });
+                    
+                    // Safe DOM insertion
+                    const userMessage = document.createElement('p');
+                    userMessage.innerHTML = '<strong>You:</strong> ' + escapeHtml(text);
+                    conversationHistory.appendChild(userMessage);
+                    
+                    inputBox.value = '';
+                    scrollToBottom();
+                }
+            }
+
+            // HTML escaping for security
+            function escapeHtml(unsafe) {
+                return unsafe
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+
+            function scrollToBottom() {
+                conversationHistory.scrollTop = conversationHistory.scrollHeight;
+            }
+
+            // Event listeners
+            sendButton.addEventListener('click', sendMessage);
+            
+            inputBox.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            sendFileButton.addEventListener('click', () => {
+                vscode.postMessage({ command: 'sendCurrentFile' });
+            });
+
+            // Message handling from extension
+            window.addEventListener('message', event => {
+                const message = event.data;
+                if (message.command === 'updateConversation') {
+                    const messageElement = document.createElement('p');
+                    messageElement.textContent = message.text; // Safe text insertion
+                    conversationHistory.appendChild(messageElement);
+                    scrollToBottom();
+                }
+            });
+        })();
+    </script>
+</body>
+</html>

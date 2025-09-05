@@ -1,0 +1,22 @@
+# Build outputs
+out/
+dist/
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Generated files
+*.d.ts
+coverage/
+
+# VS Code specific
+.vscode/settings.json
+
+# Package files
+package-lock.json
+yarn.lock

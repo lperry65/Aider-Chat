@@ -1,0 +1,79 @@
+{
+  "name": "aider-extension",
+  "displayName": "Aider Extension",
+  "description": "An extension that provides a Copilot-like experience for interacting with Aider via the CLI.",
+  "version": "0.1.0",
+  "publisher": "lperry65",
+  "engines": {
+    "vscode": "^1.50.0"
+  },
+  "activationEvents": [
+    "onView:aiderChatView"
+  ],
+  "main": "./out/extension",
+  "contributes": {
+    "commands": [
+      {
+        "command": "extension.startAider",
+        "title": "Start Aider"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aider-sidebar",
+          "title": "Aider",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "aider-sidebar": [
+        {
+          "id": "aiderChatView",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "lint:fix": "eslint src --ext ts --fix",
+    "format": "prettier --write \"src/**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,js,json,md}\"",
+    "type-check": "tsc --noEmit",
+    "test": "node ./out/src/test/runTest.js",
+    "prepare": "husky install"
+  },
+  "lint-staged": {
+    "*.{ts,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.50.0",
+    "@typescript-eslint/eslint-plugin": "^8.42.0",
+    "@typescript-eslint/parser": "^8.42.0",
+    "eslint": "^8.57.1",
+    "husky": "^8.0.3",
+    "lint-staged": "^13.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^4.2.0",
+    "vscode-test": "^1.4.0"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  }
+}
