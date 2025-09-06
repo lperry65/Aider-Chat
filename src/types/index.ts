@@ -111,9 +111,15 @@ export interface HtmlTemplateData {
 // Extension dependencies
 export interface ExtensionDependencies {
   context: ExtensionContext;
-  processManager?: IAiderProcess;
-  errorHandler?: IErrorHandler;
 }
+
+// Performance utilities types
+export type DebouncedFunction<T extends (...args: unknown[]) => unknown> = (
+  ...args: Parameters<T>
+) => void;
+export type ThrottledFunction<T extends (...args: unknown[]) => unknown> = (
+  ...args: Parameters<T>
+) => void;
 
 // Error handler interface
 export interface IErrorHandler {

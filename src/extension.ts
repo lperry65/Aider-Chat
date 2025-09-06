@@ -8,6 +8,7 @@ import { AiderChatViewProvider } from './providers/AiderChatViewProvider';
 import { EXTENSION_CONFIG } from './config/constants';
 import { ExtensionDependencies } from './types';
 import { handleError, disposeErrorHandler } from './utils/errorHandler';
+import { registerStartAiderCommand } from './commands';
 
 // Global provider instance for proper disposal
 let aiderChatProvider: AiderChatViewProvider | undefined;
@@ -17,6 +18,7 @@ let aiderChatProvider: AiderChatViewProvider | undefined;
  */
 export function activate(context: vscode.ExtensionContext): void {
   try {
+    console.log('🚀 Aider Extension activating...');
     console.log(EXTENSION_CONFIG.MESSAGES.EXTENSION_ACTIVATED);
 
     // Create dependencies
@@ -27,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // Create and register WebView provider
     aiderChatProvider = new AiderChatViewProvider(dependencies);
 
+    console.log('📋 Registering WebView provider...');
     const providerDisposable = vscode.window.registerWebviewViewProvider(
       AiderChatViewProvider.viewType,
       aiderChatProvider,
@@ -36,24 +39,22 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
     );
+    console.log('✅ WebView provider registered successfully');
 
     // Register start command
-    const startCommandDisposable = vscode.commands.registerCommand(
-      EXTENSION_CONFIG.COMMAND_ID,
-      () => {
-        // Focus the sidebar view
-        vscode.commands.executeCommand(`${EXTENSION_CONFIG.VIEW_TYPE}.focus`);
-      }
-    );
+    console.log('⚡ Registering commands...');
+    const startCommandDisposable = registerStartAiderCommand(context);
+    console.log('✅ Commands registered successfully');
 
     // Register all disposables with context.subscriptions (VS Code best practice)
+    console.log('🗂️ Registering disposables...');
     context.subscriptions.push(
       providerDisposable,
       startCommandDisposable
       // Provider disposal will be handled in deactivate()
     );
 
-    console.log('Aider Extension activation completed successfully!');
+    console.log('🎉 Aider Extension activation completed successfully!');
   } catch (error) {
     const errorMessage = `${EXTENSION_CONFIG.MESSAGES.ACTIVATION_FAILED}: ${error}`;
     console.error(errorMessage);

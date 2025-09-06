@@ -46,17 +46,13 @@
             background-color: var(--vscode-button-hoverBackground);
         }
         
-        #conversationHistory {
-            height: 300px;
-            overflow-y: scroll;
-            border: 1px solid var(--vscode-panel-border);
+        #terminal {
+            height: 400px;
+            width: 100%;
             padding: 8px;
-            background-color: var(--vscode-editor-background);
-            color: var(--vscode-editor-foreground);
+            background-color: var(--vscode-terminal-background, #1e1e1e);
+            border: 1px solid var(--vscode-panel-border);
             border-radius: 4px;
-            font-family: var(--vscode-editor-font-family);
-            font-size: 11px;
-            white-space: pre-wrap;
             margin-bottom: 10px;
         }
         
@@ -87,23 +83,7 @@
             border-color: var(--vscode-focusBorder);
         }
         
-        /* Scrollbar styling for dark theme */
-        #conversationHistory::-webkit-scrollbar {
-            width: 8px;
-        }
-        
-        #conversationHistory::-webkit-scrollbar-track {
-            background: var(--vscode-scrollbarSlider-background);
-        }
-        
-        #conversationHistory::-webkit-scrollbar-thumb {
-            background: var(--vscode-scrollbarSlider-activeBackground);
-            border-radius: 4px;
-        }
-        
-        #conversationHistory::-webkit-scrollbar-thumb:hover {
-            background: var(--vscode-scrollbarSlider-hoverBackground);
-        }
+        /* Remove the old scrollbar styling since we're using xterm now */
     </style>
 </head>
 <body>
@@ -113,7 +93,7 @@
             #{modelOptions}
         </select>
     </div>
-    <div id="conversationHistory"></div>
+    <div id="terminal"></div>
     <div class="input-container">
         <input id="inputBox" type="text" placeholder="Type your message to Aider...">
         <div class="button-container">
@@ -123,6 +103,101 @@
     </div>
     <script>
         (function() {
+            let terminal = null;
+            let fitAddon = null;
+            let retryCount = 0;
+            const maxRetries = 5;
+            
+            // Debounce utility function
+            function debounce(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            }
+            
+            // Initialize xterm terminal with debounced retry
+            function initializeTerminal() {
+                try {
+                    console.log('Checking for xterm modules...');
+                    console.log('Terminal:', typeof window.Terminal);
+                    console.log('FitAddon:', typeof window.FitAddon);
+                    console.log('window.FitAddon object:', window.FitAddon);
+                    console.log('All window properties with "Fit":', Object.keys(window).filter(key => key.includes('Fit')));
+                    
+                    // Try different ways to access FitAddon
+                    let FitAddonConstructor = null;
+                    if (window.FitAddon) {
+                        if (typeof window.FitAddon === 'function') {
+                            FitAddonConstructor = window.FitAddon;
+                        } else if (window.FitAddon.FitAddon && typeof window.FitAddon.FitAddon === 'function') {
+                            FitAddonConstructor = window.FitAddon.FitAddon;
+                        }
+                    }
+                    
+                    console.log('FitAddonConstructor:', FitAddonConstructor);
+                    
+                    if (typeof window.Terminal !== 'undefined' && FitAddonConstructor) {
+                        console.log('Creating xterm terminal...');
+                        
+                        terminal = new window.Terminal({
+                            cursorBlink: true,
+                            fontSize: 12,
+                            fontFamily: 'Courier New, monospace',
+                            theme: {
+                                background: '#1e1e1e',
+                                foreground: '#cccccc',
+                                cursor: '#ffffff'
+                            },
+                            disableStdin: true,
+                            convertEol: true
+                        });
+                        
+                        fitAddon = new FitAddonConstructor();
+                        terminal.loadAddon(fitAddon);
+                        
+                        const terminalElement = document.getElementById('terminal');
+                        terminal.open(terminalElement);
+                        fitAddon.fit();
+                        
+                        window.addEventListener('resize', debounce(() => {
+                            if (fitAddon) {
+                                fitAddon.fit();
+                            }
+                        }, 250));
+                        
+                        console.log('Xterm terminal initialized successfully');
+                        retryCount = 0; // Reset retry count on success
+                        return true;
+                    } else {
+                        console.warn('Xterm modules not available, retrying...');
+                        scheduleRetry();
+                        return false;
+                    }
+                } catch (error) {
+                    console.error('Failed to initialize xterm terminal:', error);
+                    scheduleRetry();
+                    return false;
+                }
+            }
+            
+            // Debounced retry with exponential backoff
+            function scheduleRetry() {
+                retryCount++;
+                if (retryCount <= maxRetries) {
+                    const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000); // Cap at 5 seconds
+                    console.log(`Scheduling retry ${retryCount}/${maxRetries} in ${delay}ms`);
+                    setTimeout(initializeTerminal, delay);
+                } else {
+                    console.error('Max retries reached for xterm initialization');
+                }
+            }
+            
             // Acquire VS Code API once
             const vscode = acquireVsCodeApi();
             
@@ -130,7 +205,6 @@
             const inputBox = document.getElementById('inputBox');
             const sendButton = document.getElementById('sendButton');
             const sendFileButton = document.getElementById('sendFileButton');
-            const conversationHistory = document.getElementById('conversationHistory');
             const modelSelect = document.getElementById('modelSelect');
 
             // Input validation
@@ -148,28 +222,8 @@
                         model: model 
                     });
                     
-                    // Safe DOM insertion
-                    const userMessage = document.createElement('p');
-                    userMessage.innerHTML = '<strong>You:</strong> ' + escapeHtml(text);
-                    conversationHistory.appendChild(userMessage);
-                    
                     inputBox.value = '';
-                    scrollToBottom();
                 }
-            }
-
-            // HTML escaping for security
-            function escapeHtml(unsafe) {
-                return unsafe
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
-                    .replace(/"/g, "&quot;")
-                    .replace(/'/g, "&#039;");
-            }
-
-            function scrollToBottom() {
-                conversationHistory.scrollTop = conversationHistory.scrollHeight;
             }
 
             // Event listeners
@@ -189,12 +243,21 @@
             window.addEventListener('message', event => {
                 const message = event.data;
                 if (message.command === 'updateConversation') {
-                    const messageElement = document.createElement('p');
-                    messageElement.textContent = message.text; // Safe text insertion
-                    conversationHistory.appendChild(messageElement);
-                    scrollToBottom();
+                    if (terminal) {
+                        terminal.write(message.text);
+                        console.log('Wrote to xterm terminal');
+                    } else {
+                        console.log('Terminal not ready:', message.text);
+                    }
                 }
             });
+            
+            // Initialize when ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initializeTerminal);
+            } else {
+                initializeTerminal();
+            }
         })();
     </script>
 </body>

@@ -11,7 +11,9 @@ import {
   SendCurrentFileMessage,
   UpdateConversationMessage,
   ConversationEntry,
-  ExtensionDependencies
+  ExtensionDependencies,
+  ProcessExitInfo,
+  AiderError
 } from '../types';
 import { EXTENSION_CONFIG } from '../config/constants';
 import { AiderProcess } from '../services/AiderProcess';
@@ -31,7 +33,6 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
     this.context = dependencies.context;
     this.aiderProcess = new AiderProcess();
     this.webViewHelper = new WebViewHelper(this.context.extensionUri.fsPath);
-
     this.loadPersistedState();
     this.setupProcessEventHandlers();
   }
@@ -108,7 +109,9 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    * Generate secure HTML content
    */
   private generateWebViewHtml(): void {
-    if (!this._view) return;
+    if (!this._view) {
+      return;
+    }
 
     try {
       this._view.webview.html = this.webViewHelper.generateHtml(this._view.webview);
@@ -122,7 +125,9 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    * Setup message handling from webview
    */
   private setupMessageHandling(): void {
-    if (!this._view) return;
+    if (!this._view) {
+      return;
+    }
 
     this._view.webview.onDidReceiveMessage(
       (message: WebViewMessage) => this.handleWebViewMessage(message),
@@ -157,33 +162,57 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    * Handle send message to Aider
    */
   private async handleSendToAider(message: SendToAiderMessage): Promise<void> {
+    console.log('🔵 handleSendToAider called with:', message);
     const { text, model } = message;
 
     // Validate input
     if (!text?.trim()) {
+      console.log('⚠️ No text provided, returning');
       return;
     }
 
-    // Add user message to conversation
-    this.addConversationEntry({
-      type: 'user',
-      content: text,
-      timestamp: new Date()
-    });
+    try {
+      console.log('➕ Adding user message to conversation');
+      // Add user message to conversation
+      this.addConversationEntry({
+        type: 'user',
+        content: text,
+        timestamp: new Date()
+      });
 
-    // Check if model changed
-    if (model && model !== this.aiderProcess.currentModel) {
-      await this.restartAiderWithModel(model);
-    }
+      // Check if model changed
+      if (model && model !== this.aiderProcess.currentModel) {
+        console.log('🔄 Model changed, restarting Aider');
+        await this.restartAiderWithModel(model);
+      }
 
-    // Start Aider if not running
-    if (!this.aiderProcess.isRunning) {
-      await this.startAider(model || EXTENSION_CONFIG.DEFAULT_MODEL);
-    }
+      // Start Aider if not running
+      if (!this.aiderProcess.isRunning) {
+        console.log('🚀 Starting Aider process...');
+        await this.startAider(model || EXTENSION_CONFIG.DEFAULT_MODEL);
+      }
 
-    // Send message to Aider
-    if (this.aiderProcess.isRunning) {
-      this.aiderProcess.sendMessage(text);
+      // Send message to Aider only if it's running
+      if (this.aiderProcess.isRunning) {
+        console.log('📤 Sending message to Aider');
+        this.aiderProcess.sendMessage(text);
+        console.log('✅ Message sent successfully');
+      } else {
+        console.error('❌ Aider process is not running, cannot send message');
+        this.addConversationEntry({
+          type: 'system',
+          content: 'Failed to start Aider process. Please check your configuration.',
+          timestamp: new Date()
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error in handleSendToAider:', error);
+      this.addConversationEntry({
+        type: 'system',
+        content: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+        timestamp: new Date()
+      });
+      handleError(error, 'send_to_aider');
     }
   }
 
@@ -219,13 +248,24 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    * Start Aider process
    */
   private async startAider(model: string): Promise<void> {
+    console.log('🔧 startAider called with model:', model);
     const workspaceFolder = this.getWorkspaceFolder();
+    console.log('📁 Workspace folder:', workspaceFolder);
     if (!workspaceFolder) {
+      console.log('❌ No workspace folder found');
       this.showError(EXTENSION_CONFIG.MESSAGES.NO_WORKSPACE);
       return;
     }
 
-    await safeAsync(() => this.aiderProcess.start(model, workspaceFolder), 'aider_start');
+    console.log('🚀 About to call aiderProcess.start...');
+    try {
+      await this.aiderProcess.start(model, workspaceFolder);
+      console.log('✅ aiderProcess.start completed successfully');
+    } catch (error) {
+      console.error('❌ Failed to start Aider process:', error);
+      handleError(error, 'aider_start');
+      throw error; // Re-throw to prevent further execution
+    }
   }
 
   /**
@@ -253,7 +293,7 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
       this.updateConversation(data);
     });
 
-    this.aiderProcess.onExit(exitInfo => {
+    this.aiderProcess.onExit((exitInfo: ProcessExitInfo) => {
       const message = `Aider process exited with code ${exitInfo.exitCode}`;
       this.addConversationEntry({
         type: 'system',
@@ -263,7 +303,7 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
       this.updateConversation(message);
     });
 
-    this.aiderProcess.onError(error => {
+    this.aiderProcess.onError((error: AiderError) => {
       this.showError(error.message);
     });
   }
@@ -288,8 +328,13 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    */
   private restoreConversationHistory(): void {
     this.conversationHistory.forEach(entry => {
-      const displayText = `${entry.type}: ${entry.content}`;
-      this.sendToWebView({ command: 'updateConversation', text: displayText });
+      // Validate entry before displaying
+      if (entry && entry.type && entry.content) {
+        const displayText = `${entry.type}: ${entry.content}`;
+        this.sendToWebView({ command: 'updateConversation', text: displayText });
+      } else {
+        console.warn('Skipping invalid conversation entry:', entry);
+      }
     });
   }
 
@@ -298,14 +343,33 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    */
   private loadPersistedState(): void {
     try {
+      console.log('💾 Loading persisted state...');
+
+      // Clear any corrupted state for now to fix undefined messages
+      this.context.globalState.update(EXTENSION_CONFIG.STORAGE_KEYS.CONVERSATION_HISTORY, []);
+      this.conversationHistory = [];
+      console.log('🧹 Cleared conversation history to fix undefined messages');
+
+      /* TODO: Re-enable persistence after fixing undefined issue
       const saved = this.context.globalState.get<ConversationEntry[]>(
         EXTENSION_CONFIG.STORAGE_KEYS.CONVERSATION_HISTORY,
         []
       );
 
       if (Array.isArray(saved)) {
-        this.conversationHistory = saved;
+        // Validate each entry
+        this.conversationHistory = saved.filter(entry => 
+          entry && 
+          typeof entry.type === 'string' && 
+          typeof entry.content === 'string' &&
+          entry.timestamp
+        );
+        console.log('💾 Loaded', this.conversationHistory.length, 'valid conversation entries');
+      } else {
+        console.log('⚠️ Saved data is not an array, initializing empty');
+        this.conversationHistory = [];
       }
+      */
     } catch (error) {
       handleError(error, 'load_persisted_state');
       this.conversationHistory = [];
@@ -330,7 +394,9 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    * Show fallback content if HTML generation fails
    */
   private showFallbackContent(): void {
-    if (!this._view) return;
+    if (!this._view) {
+      return;
+    }
 
     this._view.webview.html = `
       <!DOCTYPE html>

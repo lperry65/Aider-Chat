@@ -3,13 +3,12 @@
  * Follows Single Responsibility Principle and VS Code disposal patterns
  */
 
-import * as pty from 'node-pty';
 import { IAiderProcess, ProcessExitInfo, AiderError } from '../types';
 import { EXTENSION_CONFIG, ENV_VARS, AIDER_COMMANDS } from '../config/constants';
 import { handleError } from '../utils/errorHandler';
 
 export class AiderProcess implements IAiderProcess {
-  private process: pty.IPty | null = null;
+  private process: import('node-pty').IPty | null = null;
   private _currentModel: string = EXTENSION_CONFIG.DEFAULT_MODEL;
   private dataCallbacks: ((data: string) => void)[] = [];
   private exitCallbacks: ((exitInfo: ProcessExitInfo) => void)[] = [];
@@ -31,16 +30,26 @@ export class AiderProcess implements IAiderProcess {
    * Start Aider process with specified model
    */
   async start(model: string, workspaceFolder: string): Promise<void> {
+    console.log('🔨 AiderProcess.start called with:', { model, workspaceFolder });
+
     if (this.isRunning) {
+      console.log('⚠️ Process already running, stopping first');
       await this.stop();
     }
 
     this._currentModel = model;
 
     try {
+      console.log('🔧 Building process environment...');
       const processEnv = this.buildProcessEnvironment();
 
-      this.process = pty.spawn('aider', [AIDER_COMMANDS.MODEL_FLAG, model], {
+      console.log('📦 Dynamically importing node-pty...');
+      // Dynamic import of node-pty to avoid loading at module initialization
+      const pty = await import('node-pty');
+      console.log('✅ node-pty imported successfully');
+
+      console.log('🚀 Spawning aider process...');
+      this.process = pty.spawn('aider', [AIDER_COMMANDS.MODEL_FLAG, model, '.'], {
         name: EXTENSION_CONFIG.TERMINAL.NAME,
         cols: EXTENSION_CONFIG.TERMINAL.COLS,
         rows: EXTENSION_CONFIG.TERMINAL.ROWS,
@@ -48,6 +57,7 @@ export class AiderProcess implements IAiderProcess {
         cwd: workspaceFolder
       });
 
+      console.log('✅ Aider process spawned successfully');
       this.attachEventHandlers();
     } catch (error) {
       this.process = null;
@@ -175,7 +185,9 @@ export class AiderProcess implements IAiderProcess {
    * Attach event handlers to the pty process
    */
   private attachEventHandlers(): void {
-    if (!this.process) return;
+    if (!this.process) {
+      return;
+    }
 
     this.process.onData((data: string) => {
       this.notifyData(data);
