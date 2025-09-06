@@ -27,6 +27,14 @@ export interface UpdateConversationMessage extends WebViewMessage {
   text: string;
 }
 
+export interface StartNewChatMessage extends WebViewMessage {
+  command: 'startNewChat';
+}
+
+export interface ClearTerminalMessage extends WebViewMessage {
+  command: 'clearTerminal';
+}
+
 // Process-related types
 export interface ProcessExitInfo {
   exitCode: number;

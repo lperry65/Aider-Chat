@@ -59,6 +59,9 @@ export class AiderProcess implements IAiderProcess {
 
       console.log('✅ Aider process spawned successfully');
       this.attachEventHandlers();
+
+      // Wait a moment for Aider to initialize and send initial output
+      await this.captureInitialOutput();
     } catch (error) {
       this.process = null;
       const aiderError = this.createAiderError(error, 'process_start');
@@ -150,6 +153,22 @@ export class AiderProcess implements IAiderProcess {
     this.dataCallbacks = [];
     this.exitCallbacks = [];
     this.errorCallbacks = [];
+  }
+
+  /**
+   * Capture Aider's initial output after startup
+   */
+  private async captureInitialOutput(): Promise<void> {
+    if (!this.process) {
+      return;
+    }
+
+    // Wait for Aider to initialize and show its prompt
+    await this.delay(2000); // Give Aider time to start and show initial prompt
+
+    // Send a simple command to trigger output display
+    // This helps ensure the terminal shows something immediately
+    this.process.write('\r'); // Just send enter to show current state
   }
 
   /**

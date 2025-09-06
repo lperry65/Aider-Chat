@@ -9,7 +9,6 @@ import {
   WebViewMessage,
   SendToAiderMessage,
   SendCurrentFileMessage,
-  UpdateConversationMessage,
   ConversationEntry,
   ExtensionDependencies,
   ProcessExitInfo,
@@ -65,6 +64,55 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
 
     // Restore conversation if exists
     this.restoreConversationHistory();
+
+    // Start a fresh chat session if no history exists
+    this.initializeNewChatIfNeeded();
+  }
+
+  /**
+   * Initialize a new chat session if no conversation history exists
+   */
+  private async initializeNewChatIfNeeded(): Promise<void> {
+    if (this.conversationHistory.length === 0) {
+      await this.startNewChatSession();
+    }
+  }
+
+  /**
+   * Start a new chat session with Aider
+   */
+  public async startNewChatSession(): Promise<void> {
+    try {
+      const workspaceFolder = this.getWorkspaceFolder();
+      if (!workspaceFolder) {
+        this.showError(EXTENSION_CONFIG.MESSAGES.NO_WORKSPACE);
+        return;
+      }
+
+      // Clear existing conversation
+      this.conversationHistory = [];
+      this.savePersistedState();
+
+      // Clear the terminal display
+      this.sendToWebView({ command: 'clearTerminal' });
+
+      // Start Aider process with default model
+      await this.aiderProcess.start(EXTENSION_CONFIG.DEFAULT_MODEL, workspaceFolder);
+
+      // Add initial welcome message
+      this.addConversationEntry({
+        type: 'system',
+        content: '🤖 Aider is starting... Please wait for the initial prompt.',
+        timestamp: new Date()
+      });
+
+      this.sendToWebView({
+        command: 'updateConversation',
+        text: '🤖 Aider is starting... Please wait for the initial prompt.'
+      });
+    } catch (error) {
+      this.showError(`Failed to start new chat session: ${error}`);
+    }
   }
 
   /**
@@ -148,6 +196,10 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
 
         case 'sendCurrentFile':
           await this.handleSendCurrentFile(message as SendCurrentFileMessage);
+          break;
+
+        case 'startNewChat':
+          await this.startNewChatSession();
           break;
 
         default:
@@ -319,7 +371,7 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
   /**
    * Send message to webview
    */
-  private sendToWebView(message: UpdateConversationMessage): void {
+  private sendToWebView(message: { command: string; [key: string]: unknown }): void {
     this._view?.webview.postMessage(message);
   }
 
