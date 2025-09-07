@@ -31,6 +31,17 @@ export interface StartNewChatMessage extends WebViewMessage {
   command: 'startNewChat';
 }
 
+export interface TerminalInputMessage extends WebViewMessage {
+  command: 'terminalInput';
+  data: string;
+}
+
+export interface TerminalResizeMessage extends WebViewMessage {
+  command: 'terminalResize';
+  cols: number;
+  rows: number;
+}
+
 export interface ClearTerminalMessage extends WebViewMessage {
   command: 'clearTerminal';
 }

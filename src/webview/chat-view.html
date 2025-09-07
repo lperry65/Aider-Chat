@@ -13,7 +13,7 @@
             background-color: var(--vscode-sideBar-background);
             color: var(--vscode-sideBar-foreground);
         }
-        
+
         #inputBox {
             width: 100%;
             padding: 8px;
@@ -25,12 +25,12 @@
             background-color: var(--vscode-input-background);
             color: var(--vscode-input-foreground);
         }
-        
+
         #inputBox:focus {
             outline: 1px solid var(--vscode-focusBorder);
             border-color: var(--vscode-focusBorder);
         }
-        
+
         #sendButton, #sendFileButton, #newChatButton {
             padding: 6px 12px;
             background-color: var(--vscode-button-background);
@@ -41,19 +41,19 @@
             margin-right: 5px;
             font-size: 11px;
         }
-        
+
         #sendButton:hover, #sendFileButton:hover, #newChatButton:hover {
             background-color: var(--vscode-button-hoverBackground);
         }
-        
+
         #newChatButton {
             background-color: var(--vscode-button-secondaryBackground, #4a4a4a);
         }
-        
+
         #newChatButton:hover {
             background-color: var(--vscode-button-secondaryHoverBackground, #555);
         }
-        
+
         #terminal {
             height: 400px;
             width: 100%;
@@ -63,18 +63,18 @@
             border-radius: 4px;
             margin-bottom: 10px;
         }
-        
+
         .input-container {
             display: flex;
             flex-direction: column;
             gap: 5px;
         }
-        
+
         .button-container {
             display: flex;
             gap: 5px;
         }
-        
+
         #modelSelect {
             margin-bottom: 10px;
             padding: 5px;
@@ -85,12 +85,12 @@
             border: 1px solid var(--vscode-dropdown-border);
             border-radius: 4px;
         }
-        
+
         #modelSelect:focus {
             outline: 1px solid var(--vscode-focusBorder);
             border-color: var(--vscode-focusBorder);
         }
-        
+
         /* Remove the old scrollbar styling since we're using xterm now */
     </style>
 </head>
@@ -116,7 +116,7 @@
             let fitAddon = null;
             let retryCount = 0;
             const maxRetries = 5;
-            
+
             // Debounce utility function
             function debounce(func, wait) {
                 let timeout;
@@ -129,7 +129,7 @@
                     timeout = setTimeout(later, wait);
                 };
             }
-            
+
             // Initialize xterm terminal with debounced retry
             function initializeTerminal() {
                 try {
@@ -138,7 +138,7 @@
                     console.log('FitAddon:', typeof window.FitAddon);
                     console.log('window.FitAddon object:', window.FitAddon);
                     console.log('All window properties with "Fit":', Object.keys(window).filter(key => key.includes('Fit')));
-                    
+
                     // Try different ways to access FitAddon
                     let FitAddonConstructor = null;
                     if (window.FitAddon) {
@@ -148,12 +148,12 @@
                             FitAddonConstructor = window.FitAddon.FitAddon;
                         }
                     }
-                    
+
                     console.log('FitAddonConstructor:', FitAddonConstructor);
-                    
+
                     if (typeof window.Terminal !== 'undefined' && FitAddonConstructor) {
                         console.log('Creating xterm terminal...');
-                        
+
                         terminal = new window.Terminal({
                             cursorBlink: true,
                             fontSize: 12,
@@ -163,23 +163,78 @@
                                 foreground: '#cccccc',
                                 cursor: '#ffffff'
                             },
-                            disableStdin: true,
-                            convertEol: true
+                            // Enable stdin for CPR responses but block user input via onData handler
+                            disableStdin: false,
+                            convertEol: true,
+                            cols: 120,
+                            rows: 30,
+                            // Enhanced terminal options for better Aider compatibility
+                            allowProposedApi: true,
+                            cursorStyle: 'block',
+                            scrollback: 10000,
+                            tabStopWidth: 8
                         });
-                        
+
                         fitAddon = new FitAddonConstructor();
                         terminal.loadAddon(fitAddon);
-                        
+
+                        // Try to load canvas addon for better rendering if available
+                        if (window.CanvasAddon) {
+                            try {
+                                const canvasAddon = new window.CanvasAddon();
+                                terminal.loadAddon(canvasAddon);
+                                console.log('Canvas addon loaded for better rendering');
+                            } catch (error) {
+                                console.log('Canvas addon not available or failed to load:', error);
+                            }
+                        }
+
                         const terminalElement = document.getElementById('terminal');
                         terminal.open(terminalElement);
-                        fitAddon.fit();
-                        
-                        window.addEventListener('resize', debounce(() => {
+
+                        // Block all user keyboard input while allowing programmatic responses
+                        // This enables CPR (Cursor Position Request) support while preventing user typing
+                        terminal.onData((data) => {
+                            // Silently ignore all user input - users should use the input box
+                            // This allows xterm.js to still respond to control sequences from Aider
+                            console.log('Blocked user input to terminal:', data.charCodeAt(0));
+                        });
+
+                        // Initial fit after a short delay to ensure DOM is ready
+                        setTimeout(() => {
                             if (fitAddon) {
                                 fitAddon.fit();
+                                console.log('Terminal fitted with dimensions:', terminal.cols, 'x', terminal.rows);
                             }
-                        }, 250));
-                        
+                        }, 100);
+
+                        // Debounced resize handler
+                        const debouncedResize = debounce(() => {
+                            if (fitAddon && terminal) {
+                                fitAddon.fit();
+                                console.log('Terminal resized to:', terminal.cols, 'x', terminal.rows);
+                            }
+                        }, 250);
+
+                        window.addEventListener('resize', debouncedResize);
+
+                        // Also trigger resize when the webview becomes visible
+                        const observer = new MutationObserver(() => {
+                            if (terminalElement.offsetWidth > 0 && terminalElement.offsetHeight > 0) {
+                                debouncedResize();
+                            }
+                        });
+                        observer.observe(terminalElement, { attributes: true, attributeFilter: ['style'] });
+
+                        // Process any queued messages
+                        if (window.messageQueue && window.messageQueue.length > 0) {
+                            console.log('Processing', window.messageQueue.length, 'queued messages');
+                            window.messageQueue.forEach(text => {
+                                terminal.write(text);
+                            });
+                            window.messageQueue = [];
+                        }
+
                         console.log('Xterm terminal initialized successfully');
                         retryCount = 0; // Reset retry count on success
                         return true;
@@ -194,7 +249,7 @@
                     return false;
                 }
             }
-            
+
             // Debounced retry with exponential backoff
             function scheduleRetry() {
                 retryCount++;
@@ -206,10 +261,10 @@
                     console.error('Max retries reached for xterm initialization');
                 }
             }
-            
+
             // Acquire VS Code API once
             const vscode = acquireVsCodeApi();
-            
+
             // Cache DOM elements
             const inputBox = document.getElementById('inputBox');
             const sendButton = document.getElementById('sendButton');
@@ -226,19 +281,19 @@
                 const text = sanitizeInput(inputBox.value);
                 if (text) {
                     const model = modelSelect.value;
-                    vscode.postMessage({ 
-                        command: 'sendToAider', 
-                        text: text, 
-                        model: model 
+                    vscode.postMessage({
+                        command: 'sendToAider',
+                        text: text,
+                        model: model
                     });
-                    
+
                     inputBox.value = '';
                 }
             }
 
             // Event listeners
             sendButton.addEventListener('click', sendMessage);
-            
+
             inputBox.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     sendMessage();
@@ -259,20 +314,36 @@
             window.addEventListener('message', event => {
                 const message = event.data;
                 if (message.command === 'updateConversation') {
-                    if (terminal) {
-                        terminal.write(message.text);
-                        console.log('Wrote to xterm terminal');
+                    if (terminal && terminal._core && fitAddon) {
+                        try {
+                            terminal.write(message.text);
+                            // Trigger a resize after writing content to ensure proper layout
+                            setTimeout(() => {
+                                if (fitAddon) {
+                                    fitAddon.fit();
+                                }
+                            }, 50);
+                            console.log('Wrote to xterm terminal');
+                        } catch (error) {
+                            console.error('Error writing to terminal:', error);
+                            console.log('Message was:', message.text);
+                        }
                     } else {
-                        console.log('Terminal not ready:', message.text);
+                        console.log('Terminal not ready, queuing message:', message.text);
+                        // Queue the message to be written when terminal is ready
+                        if (!window.messageQueue) {
+                            window.messageQueue = [];
+                        }
+                        window.messageQueue.push(message.text);
                     }
                 } else if (message.command === 'clearTerminal') {
-                    if (terminal) {
+                    if (terminal && terminal._core) {
                         terminal.clear();
                         console.log('Terminal cleared');
                     }
                 }
             });
-            
+
             // Initialize when ready
             if (document.readyState === 'loading') {
                 document.addEventListener('DOMContentLoaded', initializeTerminal);

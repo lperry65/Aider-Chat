@@ -3,8 +3,11 @@
  * Follows Single Responsibility Principle and VS Code disposal patterns
  */
 
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
 import { IAiderProcess, ProcessExitInfo, AiderError } from '../types';
-import { EXTENSION_CONFIG, ENV_VARS, AIDER_COMMANDS } from '../config/constants';
+import { EXTENSION_CONFIG, ENV_VARS } from '../config/constants';
 import { handleError } from '../utils/errorHandler';
 
 export class AiderProcess implements IAiderProcess {
@@ -15,7 +18,7 @@ export class AiderProcess implements IAiderProcess {
   private errorCallbacks: ((error: AiderError) => void)[] = [];
 
   constructor() {
-    // Empty constructor - initialization happens in start()
+    // Initialization happens in start()
   }
 
   get isRunning(): boolean {
@@ -44,12 +47,14 @@ export class AiderProcess implements IAiderProcess {
       const processEnv = this.buildProcessEnvironment();
 
       console.log('📦 Dynamically importing node-pty...');
-      // Dynamic import of node-pty to avoid loading at module initialization
       const pty = await import('node-pty');
       console.log('✅ node-pty imported successfully');
 
-      console.log('🚀 Spawning aider process...');
-      this.process = pty.spawn('aider', [AIDER_COMMANDS.MODEL_FLAG, model, '.'], {
+      // Build CLI args from aider.conf.yml + model
+      const args = this.buildAiderArgs(model);
+
+      console.log('🚀 Spawning aider process with args:', JSON.stringify(args));
+      this.process = pty.spawn('aider', args, {
         name: EXTENSION_CONFIG.TERMINAL.NAME,
         cols: EXTENSION_CONFIG.TERMINAL.COLS,
         rows: EXTENSION_CONFIG.TERMINAL.ROWS,
@@ -60,7 +65,6 @@ export class AiderProcess implements IAiderProcess {
       console.log('✅ Aider process spawned successfully');
       this.attachEventHandlers();
 
-      // Wait a moment for Aider to initialize and send initial output
       await this.captureInitialOutput();
     } catch (error) {
       this.process = null;
@@ -70,28 +74,20 @@ export class AiderProcess implements IAiderProcess {
     }
   }
 
-  /**
-   * Stop Aider process gracefully
-   */
   async stop(): Promise<void> {
     if (!this.process) {
       return;
     }
 
     try {
-      // Send graceful exit command first
       this.process.write('/exit\r');
-
-      // Wait a moment for graceful exit
       await this.delay(1000);
 
-      // Force kill if still running
       if (this.process) {
         this.process.kill();
         this.process = null;
       }
     } catch (error) {
-      // Force cleanup on error
       if (this.process) {
         this.process.kill();
         this.process = null;
@@ -100,16 +96,12 @@ export class AiderProcess implements IAiderProcess {
     }
   }
 
-  /**
-   * Send message to Aider process
-   */
   sendMessage(message: string): void {
     if (!this.process) {
       throw new Error('Aider process is not running');
     }
 
     try {
-      // Validate and sanitize input
       const sanitizedMessage = this.sanitizeInput(message);
       this.process.write(sanitizedMessage + '\r');
     } catch (error) {
@@ -119,98 +111,120 @@ export class AiderProcess implements IAiderProcess {
     }
   }
 
-  /**
-   * Register callback for process data output
-   */
   onData(callback: (data: string) => void): void {
     this.dataCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for process exit
-   */
   onExit(callback: (exitInfo: ProcessExitInfo) => void): void {
     this.exitCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for process errors
-   */
   onError(callback: (error: AiderError) => void): void {
     this.errorCallbacks.push(callback);
   }
 
-  /**
-   * Dispose of resources - VS Code pattern
-   */
   dispose(): void {
     if (this.process) {
       this.process.kill();
       this.process = null;
     }
 
-    // Clear all callbacks
     this.dataCallbacks = [];
     this.exitCallbacks = [];
     this.errorCallbacks = [];
   }
 
-  /**
-   * Capture Aider's initial output after startup
-   */
   private async captureInitialOutput(): Promise<void> {
     if (!this.process) {
       return;
     }
 
-    // Wait for Aider to initialize and show its prompt
-    await this.delay(2000); // Give Aider time to start and show initial prompt
-
-    // Send a simple command to trigger output display
-    // This helps ensure the terminal shows something immediately
-    this.process.write('\r'); // Just send enter to show current state
+    await this.delay(2000);
+    this.process.write('\r');
   }
 
-  /**
-   * Build process environment with proper path and Ollama configuration
-   */
   private buildProcessEnvironment(): Record<string, string> {
     const baseEnv: Record<string, string> = {};
 
-    // Copy environment variables, filtering out undefined values
     Object.entries(process.env).forEach(([key, value]) => {
       if (value !== undefined) {
         baseEnv[key] = value;
       }
     });
 
-    // Add local bin to PATH if needed
     if (EXTENSION_CONFIG.PATHS.LOCAL_BIN) {
       const currentPath = baseEnv[ENV_VARS.PATH] || '';
       baseEnv[ENV_VARS.PATH] = `${currentPath}:${EXTENSION_CONFIG.PATHS.LOCAL_BIN}`;
     }
 
-    // Set Ollama API base
+    // Ollama API base from config or env
     baseEnv[ENV_VARS.OLLAMA_API_BASE] =
       process.env[ENV_VARS.OLLAMA_API_BASE] || EXTENSION_CONFIG.OLLAMA.DEFAULT_API_BASE;
 
-    // Add terminal environment
+    // Add terminal environment variables to improve compatibility
+    baseEnv.TERM = 'xterm-256color';
+    baseEnv.FORCE_COLOR = '3'; // Enable truecolor support
+    baseEnv.COLORTERM = 'truecolor';
+
     Object.assign(baseEnv, EXTENSION_CONFIG.TERMINAL.ENV);
 
     return baseEnv;
   }
 
   /**
-   * Attach event handlers to the pty process
+   * Build Aider CLI args using ~/.aider.conf.yml
    */
+  private buildAiderArgs(model: string): string[] {
+    const args: string[] = ['--model', model];
+
+    try {
+      const configPath = path.join(process.env.HOME || '', '.aider.conf.yml');
+      if (fs.existsSync(configPath)) {
+        const config = yaml.load(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+
+        // add edit-format
+        if (config['edit-format']) {
+          args.push('--edit-format', config['edit-format'] as string);
+        }
+
+        // add show-diffs
+        if (config['show-diffs']) {
+          args.push('--show-diffs');
+        }
+
+        // add restore-chat-history
+        if (config['restore-chat-history']) {
+          args.push('--restore-chat-history');
+        }
+
+        // handle set-env (map into --set-env KEY=VAL args)
+        if (config['set-env']) {
+          const envConfig = config['set-env'];
+          if (typeof envConfig === 'object' && envConfig !== null) {
+            for (const [key, value] of Object.entries(envConfig)) {
+              args.push('--set-env');
+              args.push(`${key}=${value}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Could not read aider.conf.yml, falling back to defaults:', err);
+    }
+
+    // Add current directory as the target
+    // Note: Removed '.' as aider doesn't accept directories as file arguments
+    // Aider will work in the current directory by default
+
+    return args;
+  }
+
   private attachEventHandlers(): void {
     if (!this.process) {
       return;
     }
 
-    this.process.onData((data: string) => {
-      this.notifyData(data);
-    });
+    this.process.onData((data: string) => this.notifyData(data));
 
     this.process.onExit((exitInfo: { exitCode: number; signal?: number }) => {
       const processExitInfo: ProcessExitInfo = {
@@ -223,17 +237,10 @@ export class AiderProcess implements IAiderProcess {
     });
   }
 
-  /**
-   * Sanitize input for security
-   */
   private sanitizeInput(input: string): string {
-    // Remove control characters except newline and carriage return
     return input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
   }
 
-  /**
-   * Create standardized AiderError
-   */
   private createAiderError(error: unknown, context: string): AiderError {
     const message = error instanceof Error ? error.message : String(error);
     const aiderError = new Error(message) as AiderError;
@@ -242,48 +249,36 @@ export class AiderProcess implements IAiderProcess {
     return aiderError;
   }
 
-  /**
-   * Notify data callbacks
-   */
   private notifyData(data: string): void {
-    this.dataCallbacks.forEach(callback => {
+    this.dataCallbacks.forEach(cb => {
       try {
-        callback(data);
+        cb(data);
       } catch (error) {
         handleError(error, 'data_callback');
       }
     });
   }
 
-  /**
-   * Notify exit callbacks
-   */
   private notifyExit(exitInfo: ProcessExitInfo): void {
-    this.exitCallbacks.forEach(callback => {
+    this.exitCallbacks.forEach(cb => {
       try {
-        callback(exitInfo);
+        cb(exitInfo);
       } catch (error) {
         handleError(error, 'exit_callback');
       }
     });
   }
 
-  /**
-   * Notify error callbacks
-   */
   private notifyError(error: AiderError): void {
-    this.errorCallbacks.forEach(callback => {
+    this.errorCallbacks.forEach(cb => {
       try {
-        callback(error);
+        cb(error);
       } catch (error) {
         handleError(error, 'error_callback');
       }
     });
   }
 
-  /**
-   * Simple delay utility
-   */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }

@@ -200,7 +200,7 @@ export class WebViewHelper {
    */
   private generateModelOptions(): string {
     return EXTENSION_CONFIG.AVAILABLE_MODELS.map(
-      model =>
+      (model: { id: string; displayName: string }) =>
         `<option value="${this.escapeHtml(model.id)}">${this.escapeHtml(model.displayName)}</option>`
     ).join('\n            ');
   }
