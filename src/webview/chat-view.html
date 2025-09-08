@@ -92,6 +92,68 @@
         }
 
         /* Remove the old scrollbar styling since we're using xterm now */
+
+        /* Interactive Prompt Overlay Styles */
+        #promptOverlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .prompt-dialog {
+            background-color: var(--vscode-quickInput-background);
+            border: 1px solid var(--vscode-quickInput-border);
+            border-radius: 6px;
+            padding: 20px;
+            max-width: 500px;
+            width: 90%;
+            color: var(--vscode-quickInput-foreground);
+        }
+
+        .prompt-dialog h3 {
+            margin-top: 0;
+            color: var(--vscode-textLink-foreground);
+        }
+
+        .prompt-dialog p {
+            margin: 10px 0;
+            white-space: pre-wrap;
+        }
+
+        .prompt-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .prompt-button {
+            padding: 8px 16px;
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .prompt-button:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        .prompt-button.secondary {
+            background-color: var(--vscode-button-secondaryBackground, #4a4a4a);
+        }
+
+        .prompt-button.secondary:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground, #555);
+        }
     </style>
 </head>
 <body>
@@ -110,6 +172,18 @@
             <button id="sendFileButton">Send File</button>
         </div>
     </div>
+
+    <!-- Interactive Prompt Overlay -->
+    <div id="promptOverlay">
+        <div class="prompt-dialog">
+            <h3>Aider Needs Your Input</h3>
+            <p id="promptText"></p>
+            <div id="promptButtons" class="prompt-buttons">
+                <!-- Buttons will be dynamically added here -->
+            </div>
+        </div>
+    </div>
+
     <script>
         (function() {
             let terminal = null;
@@ -163,16 +237,19 @@
                                 foreground: '#cccccc',
                                 cursor: '#ffffff'
                             },
-                            // Enable stdin for CPR responses but block user input via onData handler
+                            // Enable full terminal functionality including CPR
                             disableStdin: false,
                             convertEol: true,
                             cols: 120,
                             rows: 30,
-                            // Enhanced terminal options for better Aider compatibility
+                            // Enhanced terminal options for full Aider compatibility
                             allowProposedApi: true,
                             cursorStyle: 'block',
                             scrollback: 10000,
-                            tabStopWidth: 8
+                            tabStopWidth: 8,
+                            // Enable CPR (Cursor Position Request) support for full terminal experience
+                            windowsMode: false,
+                            screenReaderMode: false
                         });
 
                         fitAddon = new FitAddonConstructor();
@@ -192,12 +269,16 @@
                         const terminalElement = document.getElementById('terminal');
                         terminal.open(terminalElement);
 
-                        // Block all user keyboard input while allowing programmatic responses
-                        // This enables CPR (Cursor Position Request) support while preventing user typing
+                        // Allow xterm.js to handle control sequences properly
+                        // User input for chat goes through the input box
+                        // Terminal control sequences are handled automatically
+
+                        // Store terminal reference globally for CPR handling
+                        window.currentTerminal = terminal;
+
+                        // Log user input in terminal for debugging (not used for chat)
                         terminal.onData((data) => {
-                            // Silently ignore all user input - users should use the input box
-                            // This allows xterm.js to still respond to control sequences from Aider
-                            console.log('Blocked user input to terminal:', data.charCodeAt(0));
+                            console.log('Terminal user input (not used for chat):', data);
                         });
 
                         // Initial fit after a short delay to ensure DOM is ready
@@ -205,8 +286,32 @@
                             if (fitAddon) {
                                 fitAddon.fit();
                                 console.log('Terminal fitted with dimensions:', terminal.cols, 'x', terminal.rows);
+                                
+                                // Send initial terminal size to backend
+                                vscode.postMessage({
+                                    command: 'terminalResize',
+                                    cols: terminal.cols,
+                                    rows: terminal.rows
+                                });
                             }
                         }, 100);
+
+                        // Handle window resize events
+                        window.addEventListener('resize', () => {
+                            if (fitAddon && terminal) {
+                                setTimeout(() => {
+                                    fitAddon.fit();
+                                    console.log('Terminal resized to:', terminal.cols, 'x', terminal.rows);
+                                    
+                                    // Send new terminal size to backend
+                                    vscode.postMessage({
+                                        command: 'terminalResize',
+                                        cols: terminal.cols,
+                                        rows: terminal.rows
+                                    });
+                                }, 100);
+                            }
+                        });
 
                         // Debounced resize handler
                         const debouncedResize = debounce(() => {
@@ -310,37 +415,91 @@
                 }
             });
 
+            // Interactive Prompt Handling
+            function showInteractivePrompt(promptText, options = ['Yes', 'No']) {
+                const promptTextElement = document.getElementById('promptText');
+                const promptButtonsElement = document.getElementById('promptButtons');
+                const promptOverlay = document.getElementById('promptOverlay');
+
+                if (!promptTextElement || !promptButtonsElement || !promptOverlay) {
+                    console.error('Prompt elements not found');
+                    return;
+                }
+
+                // Set the prompt text
+                promptTextElement.textContent = promptText;
+
+                // Clear existing buttons
+                promptButtonsElement.innerHTML = '';
+
+                // Add buttons for each option
+                options.forEach((option, index) => {
+                    const button = document.createElement('button');
+                    button.textContent = option;
+                    button.className = `prompt-button ${index === 1 ? 'secondary' : ''}`;
+                    button.onclick = () => {
+                        hideInteractivePrompt();
+                        vscode.postMessage({
+                            command: 'interactiveResponse',
+                            response: option.toLowerCase(),
+                            originalPrompt: promptText
+                        });
+                    };
+                    promptButtonsElement.appendChild(button);
+                });
+
+                // Show the overlay
+                promptOverlay.style.display = 'flex';
+            }
+
+            function hideInteractivePrompt() {
+                const promptOverlay = document.getElementById('promptOverlay');
+                if (promptOverlay) {
+                    promptOverlay.style.display = 'none';
+                }
+            }
+
             // Message handling from extension
             window.addEventListener('message', event => {
                 const message = event.data;
                 if (message.command === 'updateConversation') {
                     if (terminal && terminal._core && fitAddon) {
                         try {
-                            terminal.write(message.text);
-                            // Trigger a resize after writing content to ensure proper layout
-                            setTimeout(() => {
-                                if (fitAddon) {
-                                    fitAddon.fit();
+                            // Check if terminal is writable
+                            if (terminal._core._bufferService) {
+                                // CPR is handled by the backend, just write the text normally
+                                const text = message.text;
+                                if (text) {
+                                    terminal.write(text);
                                 }
-                            }, 50);
-                            console.log('Wrote to xterm terminal');
+                                
+                                // Trigger a resize after writing content to ensure proper layout
+                                setTimeout(() => {
+                                    if (fitAddon) {
+                                        fitAddon.fit();
+                                    }
+                                }, 50);
+                                console.log('Wrote to xterm terminal');
+                            } else {
+                                console.warn('Terminal buffer service not available');
+                            }
                         } catch (error) {
                             console.error('Error writing to terminal:', error);
                             console.log('Message was:', message.text);
                         }
                     } else {
-                        console.log('Terminal not ready, queuing message:', message.text);
-                        // Queue the message to be written when terminal is ready
-                        if (!window.messageQueue) {
-                            window.messageQueue = [];
-                        }
-                        window.messageQueue.push(message.text);
+                        console.warn('Terminal not ready for writing');
                     }
                 } else if (message.command === 'clearTerminal') {
                     if (terminal && terminal._core) {
                         terminal.clear();
                         console.log('Terminal cleared');
                     }
+                } else if (message.command === 'showInteractivePrompt') {
+                    const options = message.options || ['Yes', 'No'];
+                    showInteractivePrompt(message.promptText, options);
+                } else if (message.command === 'hideInteractivePrompt') {
+                    hideInteractivePrompt();
                 }
             });
 

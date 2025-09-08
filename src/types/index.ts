@@ -46,6 +46,22 @@ export interface ClearTerminalMessage extends WebViewMessage {
   command: 'clearTerminal';
 }
 
+export interface ShowInteractivePromptMessage extends WebViewMessage {
+  command: 'showInteractivePrompt';
+  promptText: string;
+  options: string[];
+}
+
+export interface HideInteractivePromptMessage extends WebViewMessage {
+  command: 'hideInteractivePrompt';
+}
+
+export interface InteractiveResponseMessage extends WebViewMessage {
+  command: 'interactiveResponse';
+  response: string;
+  originalPrompt?: string;
+}
+
 // Process-related types
 export interface ProcessExitInfo {
   exitCode: number;
@@ -105,10 +121,13 @@ export interface IAiderProcess {
   start(model: string, workspaceFolder: string): Promise<void>;
   stop(): Promise<void>;
   sendMessage(message: string): void;
+  sendRawData(data: string): void;
+  resize(cols: number, rows: number): void;
 
   onData(callback: (data: string) => void): void;
   onExit(callback: (exitInfo: ProcessExitInfo) => void): void;
   onError(callback: (error: AiderError) => void): void;
+  onPrompt(callback: (prompt: { text: string; options: string[]; type: string }) => void): void;
 }
 
 // WebView provider interface

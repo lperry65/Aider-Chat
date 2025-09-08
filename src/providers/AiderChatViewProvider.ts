@@ -99,17 +99,8 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
       // Start Aider process with default model
       await this.aiderProcess.start(EXTENSION_CONFIG.DEFAULT_MODEL, workspaceFolder);
 
-      // Add initial welcome message
-      this.addConversationEntry({
-        type: 'system',
-        content: '🤖 Aider is starting... Please wait for the initial prompt.',
-        timestamp: new Date()
-      });
-
-      this.sendToWebView({
-        command: 'updateConversation',
-        text: '🤖 Aider is starting... Please wait for the initial prompt.'
-      });
+      // Wait a bit for the process to stabilize
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       this.showError(`Failed to start new chat session: ${error}`);
     }
@@ -200,6 +191,20 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
 
         case 'startNewChat':
           await this.startNewChatSession();
+          break;
+
+        case 'interactiveResponse':
+          await this.handleInteractiveResponse(message);
+          break;
+
+        case 'terminalInput':
+          await this.handleTerminalInput(message as { command: string; data: string });
+          break;
+
+        case 'terminalResize':
+          await this.handleTerminalResize(
+            message as { command: string; cols: number; rows: number }
+          );
           break;
 
         default:
@@ -358,6 +363,10 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
     this.aiderProcess.onError((error: AiderError) => {
       this.showError(error.message);
     });
+
+    this.aiderProcess.onPrompt(prompt => {
+      this.handleInteractivePrompt(prompt);
+    });
   }
 
   /**
@@ -373,6 +382,100 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
    */
   private sendToWebView(message: { command: string; [key: string]: unknown }): void {
     this._view?.webview.postMessage(message);
+  }
+
+  /**
+   * Handle interactive prompts from Aider
+   */
+  private handleInteractivePrompt(prompt: { text: string; options: string[]; type: string }): void {
+    console.log('Handling interactive prompt:', prompt);
+
+    // Send the prompt to the webview to show the overlay
+    this.sendToWebView({
+      command: 'showInteractivePrompt',
+      promptText: prompt.text,
+      options: prompt.options
+    });
+  }
+
+  /**
+   * Handle terminal input (like CPR responses) from the webview
+   */
+  private async handleTerminalInput(message: { command: string; data: string }): Promise<void> {
+    if (!this.aiderProcess.isRunning) {
+      console.warn('Terminal input received but Aider process is not running');
+      return;
+    }
+
+    try {
+      console.log('Forwarding terminal input to Aider:', message.data);
+      // Forward the terminal input (like CPR responses) directly to Aider
+      this.aiderProcess.sendRawData(message.data);
+    } catch (error) {
+      console.error('Error handling terminal input:', error);
+      handleError(error, 'terminal_input');
+    }
+  }
+
+  /**
+   * Handle terminal resize events from the webview
+   */
+  private async handleTerminalResize(message: {
+    command: string;
+    cols: number;
+    rows: number;
+  }): Promise<void> {
+    if (!this.aiderProcess.isRunning) {
+      console.warn('Terminal resize received but Aider process is not running');
+      return;
+    }
+
+    try {
+      console.log(`Resizing terminal to ${message.cols}x${message.rows}`);
+      this.aiderProcess.resize(message.cols, message.rows);
+    } catch (error) {
+      console.error('Error handling terminal resize:', error);
+      handleError(error, 'terminal_resize');
+    }
+  }
+
+  /**
+   * Handle user response to interactive prompts
+   */
+  private async handleInteractiveResponse(
+    message: WebViewMessage & { response?: string; originalPrompt?: string }
+  ): Promise<void> {
+    if (!this.aiderProcess.isRunning) {
+      console.warn('Interactive response received but Aider process is not running');
+      return;
+    }
+
+    try {
+      const response = message.response || '';
+      console.log('User responded to interactive prompt:', response);
+
+      // Convert user-friendly responses to terminal input
+      let terminalInput = '';
+      if (response.toLowerCase() === 'yes' || response.toLowerCase() === 'y') {
+        terminalInput = 'y\n';
+      } else if (response.toLowerCase() === 'no' || response.toLowerCase() === 'n') {
+        terminalInput = 'n\n';
+      } else if (response.toLowerCase() === 'continue') {
+        terminalInput = '\n';
+      } else {
+        // For custom responses, use as-is
+        terminalInput = response + '\n';
+      }
+
+      // Send the response to Aider
+      this.aiderProcess.sendMessage(terminalInput);
+
+      // Hide the prompt overlay
+      this.sendToWebView({ command: 'hideInteractivePrompt' });
+    } catch (error) {
+      console.error('Error handling interactive response:', error);
+      handleError(error, 'interactive_response');
+    }
   }
 
   /**

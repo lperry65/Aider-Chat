@@ -14,8 +14,14 @@ const config = {
   },
   externals: {
     vscode: 'commonjs vscode', // the vscode-module is created on-the-fly and must be excluded. Add other modules that cannot be webpack'ed, 📖 -> https://webpack.js.org/configuration/externals/
-    // Add node-pty as external - it's a native module that cannot be bundled
-    'node-pty': 'commonjs node-pty',
+    // Add @lydell/node-pty and its binary packages as externals - they are native modules that cannot be bundled
+    '@lydell/node-pty': 'commonjs @lydell/node-pty',
+    '@lydell/node-pty-linux-x64': 'commonjs @lydell/node-pty-linux-x64',
+    '@lydell/node-pty-linux-arm64': 'commonjs @lydell/node-pty-linux-arm64',
+    '@lydell/node-pty-darwin-x64': 'commonjs @lydell/node-pty-darwin-x64',
+    '@lydell/node-pty-darwin-arm64': 'commonjs @lydell/node-pty-darwin-arm64',
+    '@lydell/node-pty-win32-x64': 'commonjs @lydell/node-pty-win32-x64',
+    '@lydell/node-pty-win32-arm64': 'commonjs @lydell/node-pty-win32-arm64',
     // Add xterm as external for webview usage
     '@xterm/xterm': 'commonjs @xterm/xterm',
     '@xterm/addon-fit': 'commonjs @xterm/addon-fit'
