@@ -20,8 +20,8 @@ export const EXTENSION_CONFIG = {
 
   TERMINAL: {
     NAME: 'Aider Terminal',
-    COLS: 120,
-    ROWS: 30,
+    COLS: 80, // More conservative default that matches typical small terminals
+    ROWS: 24, // Standard terminal height
     ENV: {} // additional environment vars if needed
   },
 

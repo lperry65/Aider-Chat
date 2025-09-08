@@ -276,23 +276,76 @@
                         // Store terminal reference globally for CPR handling
                         window.currentTerminal = terminal;
 
-                        // Log user input in terminal for debugging (not used for chat)
+                        // Enhanced CPR handling - the key insight is that xterm.js handles CPR automatically
+                        // but we need to make sure the PTY gets a proper response when Aider sends CPR requests
+                        
+                        // Handle user input in terminal (keyboard input, not CPR responses)
                         terminal.onData((data) => {
-                            console.log('Terminal user input (not used for chat):', data);
+                            console.log('🔄 Terminal user input (routing to PTY):', JSON.stringify(data));
+                            
+                            // Route user input to the backend PTY
+                            vscode.postMessage({
+                                command: 'terminalInput',
+                                data: data
+                            });
                         });
 
-                        // Initial fit after a short delay to ensure DOM is ready
+                        // Handle incoming data from PTY (including CPR requests from Aider)
+                        // We need to intercept CPR requests and respond immediately
+                        let cprBuffer = '';
+                        const originalWrite = terminal.write.bind(terminal);
+                        terminal.write = function(data) {
+                            if (typeof data === 'string') {
+                                cprBuffer += data;
+                                
+                                // Check for CPR request (\x1b[6n)
+                                const cprMatch = cprBuffer.match(/\x1b\[6n/);
+                                if (cprMatch) {
+                                    console.log('🎯 CPR request detected from Aider!');
+                                    
+                                    // Generate immediate CPR response with current cursor position
+                                    setTimeout(() => {
+                                        const row = terminal.buffer.active.cursorY + 1;
+                                        const col = terminal.buffer.active.cursorX + 1;
+                                        const cprResponse = `\x1b[${row};${col}R`;
+                                        
+                                        console.log('📤 Sending CPR response:', JSON.stringify(cprResponse));
+                                        
+                                        // Send CPR response back to Aider via PTY
+                                        vscode.postMessage({
+                                            command: 'terminalInput',
+                                            data: cprResponse,
+                                            isCPR: true
+                                        });
+                                    }, 10); // Small delay to ensure terminal is ready
+                                    
+                                    // Clear the buffer after processing
+                                    cprBuffer = '';
+                                }
+                                
+                                // Keep only recent data in buffer (prevent memory leaks)
+                                if (cprBuffer.length > 1000) {
+                                    cprBuffer = cprBuffer.slice(-500);
+                                }
+                            }
+                            
+                            // Call original write function
+                            return originalWrite(data);
+                        };
+
+                        // Initial fit and readiness signal
                         setTimeout(() => {
                             if (fitAddon) {
                                 fitAddon.fit();
-                                console.log('Terminal fitted with dimensions:', terminal.cols, 'x', terminal.rows);
+                                console.log('📏 Webview terminal fitted with dimensions:', terminal.cols, 'x', terminal.rows);
                                 
-                                // Send initial terminal size to backend
+                                // Send the "I'm ready" signal to the backend with dimensions
                                 vscode.postMessage({
-                                    command: 'terminalResize',
+                                    command: 'webviewReady',
                                     cols: terminal.cols,
                                     rows: terminal.rows
                                 });
+                                console.log('✅ Sent webviewReady signal to backend');
                             }
                         }, 100);
 
@@ -301,7 +354,7 @@
                             if (fitAddon && terminal) {
                                 setTimeout(() => {
                                     fitAddon.fit();
-                                    console.log('Terminal resized to:', terminal.cols, 'x', terminal.rows);
+                                    console.log('📏 Webview terminal resized to:', terminal.cols, 'x', terminal.rows);
                                     
                                     // Send new terminal size to backend
                                     vscode.postMessage({
@@ -309,6 +362,7 @@
                                         cols: terminal.cols,
                                         rows: terminal.rows
                                     });
+                                    console.log('📏 Sent resize message to backend:', terminal.cols, 'x', terminal.rows);
                                 }, 100);
                             }
                         });

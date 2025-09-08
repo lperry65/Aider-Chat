@@ -27,6 +27,7 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
   private readonly webViewHelper: WebViewHelper;
   private readonly context: vscode.ExtensionContext;
   private conversationHistory: ConversationEntry[] = [];
+  private pendingAiderStart?: { model: string; workspaceFolder: string };
 
   constructor(dependencies: ExtensionDependencies) {
     this.context = dependencies.context;
@@ -96,11 +97,11 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
       // Clear the terminal display
       this.sendToWebView({ command: 'clearTerminal' });
 
-      // Start Aider process with default model
-      await this.aiderProcess.start(EXTENSION_CONFIG.DEFAULT_MODEL, workspaceFolder);
-
-      // Wait a bit for the process to stabilize
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Don't start Aider immediately - wait for terminal size from webview
+      this.pendingAiderStart = {
+        model: EXTENSION_CONFIG.DEFAULT_MODEL,
+        workspaceFolder: workspaceFolder
+      };
     } catch (error) {
       this.showError(`Failed to start new chat session: ${error}`);
     }
@@ -201,6 +202,10 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
           await this.handleTerminalInput(message as { command: string; data: string });
           break;
 
+        case 'webviewReady':
+          await this.handleWebviewReady(message as { command: string; cols: number; rows: number });
+          break;
+
         case 'terminalResize':
           await this.handleTerminalResize(
             message as { command: string; cols: number; rows: number }
@@ -243,10 +248,17 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
         await this.restartAiderWithModel(model);
       }
 
-      // Start Aider if not running
+      // If Aider is not running, show a message and wait for it to be started by webviewReady
       if (!this.aiderProcess.isRunning) {
-        console.log('🚀 Starting Aider process...');
-        await this.startAider(model || EXTENSION_CONFIG.DEFAULT_MODEL);
+        console.log('⏳ Aider is not running yet, waiting for webview to be ready.');
+        this.addConversationEntry({
+          type: 'system',
+          content: 'Aider is starting, please wait...',
+          timestamp: new Date()
+        });
+        // The message will be sent once the process starts, or we can queue it.
+        // For now, we just inform the user.
+        return;
       }
 
       // Send message to Aider only if it's running
@@ -302,37 +314,21 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
   }
 
   /**
-   * Start Aider process
-   */
-  private async startAider(model: string): Promise<void> {
-    console.log('🔧 startAider called with model:', model);
-    const workspaceFolder = this.getWorkspaceFolder();
-    console.log('📁 Workspace folder:', workspaceFolder);
-    if (!workspaceFolder) {
-      console.log('❌ No workspace folder found');
-      this.showError(EXTENSION_CONFIG.MESSAGES.NO_WORKSPACE);
-      return;
-    }
-
-    console.log('🚀 About to call aiderProcess.start...');
-    try {
-      await this.aiderProcess.start(model, workspaceFolder);
-      console.log('✅ aiderProcess.start completed successfully');
-    } catch (error) {
-      console.error('❌ Failed to start Aider process:', error);
-      handleError(error, 'aider_start');
-      throw error; // Re-throw to prevent further execution
-    }
-  }
-
-  /**
    * Restart Aider with new model
    */
   private async restartAiderWithModel(model: string): Promise<void> {
     if (this.aiderProcess.isRunning) {
       await safeAsync(() => this.aiderProcess.stop(), 'aider_stop');
     }
-    await this.startAider(model);
+
+    // Set pending start and refresh webview to trigger restart
+    const workspaceFolder = this.getWorkspaceFolder();
+    if (workspaceFolder) {
+      this.pendingAiderStart = { model, workspaceFolder };
+      this.refresh();
+    } else {
+      this.showError(EXTENSION_CONFIG.MESSAGES.NO_WORKSPACE);
+    }
   }
 
   /**
@@ -401,19 +397,60 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
   /**
    * Handle terminal input (like CPR responses) from the webview
    */
-  private async handleTerminalInput(message: { command: string; data: string }): Promise<void> {
+  private async handleTerminalInput(message: {
+    command: string;
+    data: string;
+    isCPR?: boolean;
+  }): Promise<void> {
     if (!this.aiderProcess.isRunning) {
       console.warn('Terminal input received but Aider process is not running');
       return;
     }
 
     try {
-      console.log('Forwarding terminal input to Aider:', message.data);
+      if (message.isCPR) {
+        console.log('🎯 Forwarding CPR response to Aider:', JSON.stringify(message.data));
+      } else {
+        console.log('🔄 Forwarding terminal input to Aider:', JSON.stringify(message.data));
+      }
+
       // Forward the terminal input (like CPR responses) directly to Aider
       this.aiderProcess.sendRawData(message.data);
     } catch (error) {
       console.error('Error handling terminal input:', error);
       handleError(error, 'terminal_input');
+    }
+  }
+
+  /**
+   * Handle the webview's "ready" signal
+   */
+  private async handleWebviewReady(message: {
+    command: string;
+    cols: number;
+    rows: number;
+  }): Promise<void> {
+    // If we have a pending Aider start, start it now with the correct terminal size
+    if (this.pendingAiderStart && !this.aiderProcess.isRunning) {
+      try {
+        console.log(
+          `🚀 Webview is ready. Starting Aider with terminal size ${message.cols}x${message.rows}`
+        );
+
+        // Update the PTY configuration with the actual terminal size
+        await this.aiderProcess.startWithSize(
+          this.pendingAiderStart.model,
+          this.pendingAiderStart.workspaceFolder,
+          message.cols,
+          message.rows
+        );
+
+        this.pendingAiderStart = undefined;
+      } catch (error) {
+        console.error('Error starting Aider with terminal size:', error);
+        handleError(error, 'aider_start_with_size');
+        return;
+      }
     }
   }
 
@@ -425,17 +462,15 @@ export class AiderChatViewProvider implements vscode.WebviewViewProvider, IWebVi
     cols: number;
     rows: number;
   }): Promise<void> {
-    if (!this.aiderProcess.isRunning) {
-      console.warn('Terminal resize received but Aider process is not running');
-      return;
-    }
-
-    try {
-      console.log(`Resizing terminal to ${message.cols}x${message.rows}`);
-      this.aiderProcess.resize(message.cols, message.rows);
-    } catch (error) {
-      console.error('Error handling terminal resize:', error);
-      handleError(error, 'terminal_resize');
+    // If Aider is running, resize the terminal
+    if (this.aiderProcess.isRunning) {
+      try {
+        console.log(`Resizing terminal to ${message.cols}x${message.rows}`);
+        this.aiderProcess.resize(message.cols, message.rows);
+      } catch (error) {
+        console.error('Error handling terminal resize:', error);
+        handleError(error, 'terminal_resize');
+      }
     }
   }
 

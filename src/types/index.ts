@@ -118,7 +118,7 @@ export interface IAiderProcess {
   readonly isRunning: boolean;
   readonly currentModel: string;
 
-  start(model: string, workspaceFolder: string): Promise<void>;
+  startWithSize(model: string, workspaceFolder: string, cols: number, rows: number): Promise<void>;
   stop(): Promise<void>;
   sendMessage(message: string): void;
   sendRawData(data: string): void;

@@ -36,6 +36,17 @@
           "icon": "$(comment-discussion)"
         }
       ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Aider Configuration",
+      "properties": {
+        "aider.noPretty": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use --no-pretty flag for Aider (default: false). Enable this only if you experience CPR warnings or terminal compatibility issues. This will disable colors and formatting but improve compatibility."
+        }
+      }
     }
   },
   "scripts": {

@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import * as vscode from 'vscode';
 import * as pty from '@lydell/node-pty';
 import { IAiderProcess, ProcessExitInfo, AiderError } from '../types';
 import { EXTENSION_CONFIG, ENV_VARS } from '../config/constants';
@@ -19,6 +20,8 @@ export class AiderProcess implements IAiderProcess {
   private errorCallbacks: ((error: AiderError) => void)[] = [];
   private promptCallbacks: ((prompt: { text: string; options: string[]; type: string }) => void)[] =
     [];
+  // Buffer incoming PTY data to handle sequences that may be split across packets
+  private incomingBuffer: string = '';
 
   constructor() {
     // Initialization happens in start()
@@ -33,10 +36,20 @@ export class AiderProcess implements IAiderProcess {
   }
 
   /**
-   * Start Aider process with specified model
+   * Start Aider process with specified model and terminal size
    */
-  async start(model: string, workspaceFolder: string): Promise<void> {
-    console.log('🔨 AiderProcess.start called with:', { model, workspaceFolder });
+  async startWithSize(
+    model: string,
+    workspaceFolder: string,
+    cols: number,
+    rows: number
+  ): Promise<void> {
+    console.log('🔨 AiderProcess.startWithSize called with:', {
+      model,
+      workspaceFolder,
+      cols,
+      rows
+    });
 
     if (this.isRunning) {
       console.log('⚠️ Process already running, stopping first');
@@ -47,7 +60,7 @@ export class AiderProcess implements IAiderProcess {
 
     try {
       console.log('🔧 Building process environment...');
-      const processEnv = this.buildProcessEnvironment();
+      const processEnv = this.buildProcessEnvironment(cols, rows);
 
       console.log('📦 Dynamically importing node-pty...');
       const pty = await import('@lydell/node-pty');
@@ -57,15 +70,18 @@ export class AiderProcess implements IAiderProcess {
       const args = this.buildAiderArgs(model);
 
       console.log('🚀 Spawning aider process with args:', JSON.stringify(args));
+      console.log(`📏 Using actual terminal size: ${cols}x${rows}`);
+      console.log(`📏 Environment COLUMNS=${processEnv.COLUMNS}, LINES=${processEnv.LINES}`);
+
       this.process = pty.spawn('aider', args, {
         name: EXTENSION_CONFIG.TERMINAL.NAME,
-        cols: EXTENSION_CONFIG.TERMINAL.COLS,
-        rows: EXTENSION_CONFIG.TERMINAL.ROWS,
+        cols: cols,
+        rows: rows,
         env: processEnv,
         cwd: workspaceFolder
       });
 
-      console.log('✅ Aider process spawned successfully');
+      console.log('✅ Aider process spawned successfully with correct size');
       this.attachEventHandlers();
 
       await this.captureInitialOutput();
@@ -137,7 +153,7 @@ export class AiderProcess implements IAiderProcess {
 
     try {
       this.process.resize(cols, rows);
-      console.log(`Terminal resized to ${cols}x${rows}`);
+      console.log(`📏 PTY resized to ${cols}x${rows}`);
     } catch (error) {
       console.error('Error resizing terminal:', error);
     }
@@ -176,14 +192,14 @@ export class AiderProcess implements IAiderProcess {
       return;
     }
 
-    // Wait for process to stabilize and allow initial output to complete
-    await this.delay(1500);
+    // Wait for webview to be fully initialized and CPR handling to be ready
+    await this.delay(2000);
 
-    // Don't send anything - the CPR detection is now handled by the immediate
-    // response in notifyData(), so we don't need to trigger anything here
+    // Send a simple newline to trigger initial interaction
+    this.process.write('\r');
   }
 
-  private buildProcessEnvironment(): Record<string, string> {
+  private buildProcessEnvironment(cols?: number, rows?: number): Record<string, string> {
     const baseEnv: Record<string, string> = {};
 
     Object.entries(process.env).forEach(([key, value]) => {
@@ -201,14 +217,20 @@ export class AiderProcess implements IAiderProcess {
     baseEnv[ENV_VARS.OLLAMA_API_BASE] =
       process.env[ENV_VARS.OLLAMA_API_BASE] || EXTENSION_CONFIG.OLLAMA.DEFAULT_API_BASE;
 
-    // Add terminal environment variables to provide full terminal experience
-    baseEnv.TERM = 'xterm-256color'; // Full featured terminal with CPR support
+    // Add terminal environment variables optimized for webview compatibility
+    // Use xterm-256color but indicate this is a VS Code integrated terminal
+    baseEnv.TERM = 'xterm-256color';
     baseEnv.FORCE_COLOR = '3'; // Enable truecolor support
     baseEnv.COLORTERM = 'truecolor';
-    baseEnv.LINES = EXTENSION_CONFIG.TERMINAL.ROWS.toString();
-    baseEnv.COLUMNS = EXTENSION_CONFIG.TERMINAL.COLS.toString();
-    baseEnv.TERM_PROGRAM = 'vscode-aider-extension';
+
+    // Add VS Code terminal identification to help applications adapt
+    baseEnv.VSCODE_INJECTION = '1';
+    baseEnv.TERM_PROGRAM = 'vscode';
     baseEnv.TERM_PROGRAM_VERSION = '1.0.0';
+
+    // Use provided dimensions or fall back to config defaults
+    baseEnv.LINES = (rows || EXTENSION_CONFIG.TERMINAL.ROWS).toString();
+    baseEnv.COLUMNS = (cols || EXTENSION_CONFIG.TERMINAL.COLS).toString();
 
     Object.assign(baseEnv, EXTENSION_CONFIG.TERMINAL.ENV);
 
@@ -224,8 +246,15 @@ export class AiderProcess implements IAiderProcess {
     // Add terminal compatibility options
     args.push('--no-gui', '--no-browser', '--no-copy-paste');
 
-    // Add option to disable CPR if available (this might not exist in Aider)
-    // args.push('--no-cpr'); // Uncomment if Aider supports this option
+    // Only use --no-pretty as a user-configurable fallback for CPR issues
+    // By default, keep all the nice colors and formatting
+    const useNoPretty = vscode.workspace.getConfiguration('aider').get<boolean>('noPretty', false);
+    if (useNoPretty) {
+      args.push('--no-pretty');
+      console.log('📝 Using --no-pretty flag (user enabled for compatibility)');
+    } else {
+      console.log('🎨 Keeping pretty output with colors and formatting');
+    }
 
     try {
       const configPath = path.join(process.env.HOME || '', '.aider.conf.yml');
@@ -312,34 +341,66 @@ export class AiderProcess implements IAiderProcess {
   }
 
   private notifyData(data: string): void {
-    // Handle CPR requests immediately
-    if (data.includes('\x1b[6n')) {
-      console.log('CPR request detected from Aider, responding immediately');
-      // Send immediate CPR response (cursor at position 1,1 by default)
-      const cprResponse = '\x1b[1;1R';
-      this.sendRawData(cprResponse);
+    // Robustly handle incoming PTY data by buffering it. This ensures escape
+    // sequences like CPR (\x1b[6n) are detected even if split across chunks.
+    const CPR_SEQ = '\x1b[6n';
+    const CPR_RESP = '\x1b[24;1R'; // More realistic cursor position (row 24, col 1)
 
-      // Remove CPR request from data to avoid displaying it
-      data = data.replace(/\x1b\[6n/g, '');
-      if (!data.trim()) {
-        return; // Don't send empty data
+    this.incomingBuffer += data;
+
+    // Process any complete CPR sequences in the buffer
+    let idx = this.incomingBuffer.indexOf(CPR_SEQ);
+    while (idx !== -1) {
+      const before = this.incomingBuffer.slice(0, idx);
+      if (before) {
+        if (!this.handleInteractivePrompt(before)) {
+          this.dispatchToCallbacks(before);
+        }
+      }
+
+      // Respond immediately to CPR
+      try {
+        console.log('🎯 CPR request detected from Aider (buffered), responding immediately');
+        this.sendRawData(CPR_RESP);
+      } catch (err) {
+        console.error('❌ Error sending CPR response:', err);
+      }
+
+      // Remove processed part and continue
+      this.incomingBuffer = this.incomingBuffer.slice(idx + CPR_SEQ.length);
+      idx = this.incomingBuffer.indexOf(CPR_SEQ);
+    }
+
+    // To avoid breaking escape sequences, keep a small tail in buffer. Flush
+    // everything except the tail to callbacks.
+    const MAX_TAIL = 16;
+    if (this.incomingBuffer.length > MAX_TAIL) {
+      const sendable = this.incomingBuffer.slice(0, this.incomingBuffer.length - MAX_TAIL);
+      if (sendable) {
+        if (!this.handleInteractivePrompt(sendable)) {
+          this.dispatchToCallbacks(sendable);
+        }
+      }
+      this.incomingBuffer = this.incomingBuffer.slice(-MAX_TAIL);
+    }
+
+    // If buffer is small and contains no ESC, it's safe to flush fully.
+    if (this.incomingBuffer && this.incomingBuffer.indexOf('\x1b') === -1) {
+      const rem = this.incomingBuffer;
+      this.incomingBuffer = '';
+      if (!this.handleInteractivePrompt(rem)) {
+        this.dispatchToCallbacks(rem);
       }
     }
+  }
 
-    // Handle interactive prompts that need user interaction
-    if (this.handleInteractivePrompt(data)) {
-      return; // Don't send the prompt to webview, handle it through the prompt system
-    }
-
-    // Log control sequences for debugging
-    if (data.charCodeAt(0) === 27) {
-      // ESC character
-      console.log('Control sequence from PTY:', data);
-    }
-
+  // Helper to forward text to registered data callbacks with error handling
+  private dispatchToCallbacks(text: string): void {
     this.dataCallbacks.forEach(cb => {
       try {
-        cb(data);
+        if (text) {
+          cb(text);
+        }
       } catch (error) {
         handleError(error, 'data_callback');
       }
